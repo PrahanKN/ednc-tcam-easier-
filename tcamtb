@@ -1,146 +1,97 @@
 module tb_tcam;
+    // Parameters
+    parameter DATA_WIDTH = 32;
+    parameter ENTRY_COUNT = 16;
+    parameter HAMMING_THRESHOLD = 2;
 
-  // Parameters
-  parameter ADDR_WIDTH = 4;
-  parameter KEY_WIDTH = 4;
-  parameter DATA_WIDTH = 4;
+    // Testbench signals
+    reg clk;
+    reg reset;
+    reg write_enable;
+    reg [$clog2(ENTRY_COUNT)-1:0] write_index;
+    reg [DATA_WIDTH-1:0] write_data;
+    reg [DATA_WIDTH-1:0] write_mask;
+    reg [DATA_WIDTH-1:0] search_key;
+    wire match;
+    wire [$clog2(ENTRY_COUNT)-1:0] match_index;
 
-  // Inputs
-  reg clk;
-  reg rst;
-  reg [ADDR_WIDTH-1:0] set_addr;
-  reg [DATA_WIDTH-1:0] set_data;
-  reg set_clr;
-  reg set_valid;
-  reg [KEY_WIDTH-1:0] req_key;
-  reg req_valid;
+    // Instantiate the DUT
+    tcam #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .ENTRY_COUNT(ENTRY_COUNT),
+        .HAMMING_THRESHOLD(HAMMING_THRESHOLD)
+    ) dut (
+        .clk(clk),
+        .reset(reset),
+        .write_enable(write_enable),
+        .write_index(write_index),
+        .write_data(write_data),
+        .write_mask(write_mask),
+        .search_key(search_key),
+        .match(match),
+        .match_index(match_index)
+    );
 
-  // Outputs
-  wire req_ready;
-  wire [ADDR_WIDTH-1:0] res_addr;
-  wire [DATA_WIDTH-1:0] res_data;
-  wire res_valid;
-  wire res_null;
+    // Clock generation
+    initial begin
+        clk = 0;
+        forever #5 clk = ~clk; // 10ns clock period
+    end
 
-  // Instantiate the TCAM module
-  tcam #(
-    .ADDR_WIDTH(ADDR_WIDTH),
-    .KEY_WIDTH(KEY_WIDTH),
-    .DATA_WIDTH(DATA_WIDTH)
-  ) tcam_inst (
-    .clk(clk),
-    .rst(rst),
-    .set_addr(set_addr),
-    .set_data(set_data),
-    .set_clr(set_clr),
-    .set_valid(set_valid),
-    .req_key(req_key),
-    .req_valid(req_valid),
-    .req_ready(req_ready),
-    .res_addr(res_addr),
-    .res_data(res_data),
-    .res_valid(res_valid),
-    .res_null(res_null)
-  );
+    // Testbench procedure
+    initial begin
+        // Initialize signals
+        reset = 1;
+        write_enable = 0;
+        write_index = 0;
+        write_data = 0;
+        write_mask = 0;
+        search_key = 0;
 
-  // Clock generation
-  always begin
-    #5 clk = ~clk; // 100 MHz clock
-  end
+        // Apply reset
+        #10 reset = 0;
 
-  // Stimulus generation
-  initial begin
-    // Initialize inputs
-    clk = 0;
-    rst = 0;
-    set_addr = 0;
-    set_data = 0;
-    set_clr = 0;
-    set_valid = 0;
-    req_key = 0;
-    req_valid = 0;
+        // Write entries into the TCAM
+        // Entry 0: Data = 32'hAAAAAAAA, Mask = 32'h00000000
+        #10 write_enable = 1; write_index = 0; write_data = 32'hAAAAAAAA; write_mask = 32'h00000000;
+        #10 write_enable = 0;
 
-    // Reset the system
-    #10 rst = 1;
-    #20 rst = 0;
+        // Entry 1: Data = 32'h55555555, Mask = 32'h00000000
+        #10 write_enable = 1; write_index = 1; write_data = 32'h55555555; write_mask = 32'h00000000;
+        #10 write_enable = 0;
 
-    // Test 1: Set data into TCAM with no errors
-    set_addr = 4'b0001;
-    set_data = 4'b1010;
-    set_valid = 1;
-    #10 set_valid = 0; // Clear set_valid
-    #20;
+        // Entry 2: Data = 32'hFFFF0000, Mask = 32'h0000FFFF
+        #10 write_enable = 1; write_index = 2; write_data = 32'hFFFF0000; write_mask = 32'h0000FFFF;
+        #10 write_enable = 0;
 
-    // Test 2: Request data with no error
-    req_key = 4'b1010; // Key that was just set
-    req_valid = 1;
-    #10 req_valid = 0; // Clear req_valid
-    #20;
+        // Perform searches
+        // Case 1: Exact match with Entry 0
+        #10 search_key = 32'hAAAAAAAA;
+        #10;
+        if (match && match_index == 0) $display("Test Case 1 Passed");
+        else $display("Test Case 1 Failed");
 
-    // Test 3: Inject error in the set data (flip 1 bit)
-    set_addr = 4'b0010;
-    set_data = 4'b1100;
-    set_valid = 1;
-    #10 set_data = set_data ^ 4'b0001; // Inject single-bit error by flipping the LSB
-    #10 set_valid = 0; // Clear set_valid
-    #20;
+        // Case 2: Match within Hamming distance of Entry 1
+        #10 search_key = 32'h55555550; // 2-bit difference
+        #10;
+        if (match && match_index == 1) $display("Test Case 2 Passed");
+        else $display("Test Case 2 Failed");
+      
+        // Case 3: No match due to Hamming threshold
+        #10 search_key = 32'h12345678; // Large difference
+        #10;
+        if (!match) $display("Test Case 3 Passed");
+        else $display("Test Case 3 Failed");
 
-    // Test 4: Request data after error injection
-    req_key = 4'b1100; // Request for data with error
-    req_valid = 1;
-    #10 req_valid = 0; // Clear req_valid
-    #20;
-
-    // Test 5: Inject error in the request key (flip 1 bit)
-    req_key = 4'b1010; // Request key for the first set
-    req_valid = 1;
-    #10 req_key = req_key ^ 4'b0001; // Flip 1 bit in the request key
-    #10 req_valid = 0; // Clear req_valid
-    #20;
-
-    // Test 6: Set data again with another error injected
-    set_addr = 4'b0100;
-    set_data = 4'b1111;
-    set_valid = 1;
-    #10 set_data = set_data ^ 4'b0010; // Flip a bit to inject an error
-    #10 set_valid = 0; // Clear set_valid
-    #20;
-
-    // Test 7: Request data with injected error
-    req_key = 4'b1111; // Key with error set previously
-    req_valid = 1;
-    #10 req_valid = 0; // Clear req_valid
-    #20;
-
-    // Test 8: Clear the error and check if it is corrected
-    set_clr = 1; // Clear the error data
-    #10 set_clr = 0; // Clear clear signal
-
-    // Test 9: Check data after clearing error
-    req_key = 4'b1111; // Key after error clear
-    req_valid = 1;
-    #10 req_valid = 0; // Clear req_valid
-    #20;
-
-    // Test 10: Final verification
-    req_key = 4'b1010; // Re-check original entry
-    req_valid = 1;
-    #10 req_valid = 0;
-    #20;
-    
-    req_key = 4'b1010; // Key that was just set
-    req_valid = 1;
-    #10 req_valid = 0; // Clear req_valid
-    #20;
-
-    // Stop simulation
-    $finish;
-  end
-
-  // Monitoring output
-  initial begin
-    $monitor("At time %t, rst = %b, set_addr = %b, set_data = %b, req_key = %b, req_ready = %b, res_addr = %b, res_data = %b, res_valid = %b, res_null = %b",
-          $time, rst, set_addr, set_data, req_key, req_ready, res_addr, res_data, res_valid, res_null);
-  end
+        // Case 4: Match with Entry 2 ignoring masked bits
+        #10 search_key = 32'hFFFF1234; // Masked lower 16 bits
+        #10;
+        if (match && match_index == 2) $display("Test Case 4 Passed");
+        else $display("Test Case 4 Failed");
+              
+        $monitor("match value= %d and match_index= %d\n",match,match_index);
+        // Finish simulation
+        #10 $stop;
+    end
 
 endmodule
