@@ -1,0 +1,95 @@
+module tcam #(
+    parameter ADDR_WIDTH = 4,
+    parameter KEY_WIDTH = 4,
+    parameter DATA_WIDTH = 4,
+    parameter MASK_DISABLE = 0,
+    parameter RAM_STYLE_DATA = "block"
+)
+(
+    input wire clk,
+    input wire rst,
+    /* Set */
+    input wire [ADDR_WIDTH-1:0]set_addr,
+    input wire [DATA_WIDTH-1:0]set_data,
+    input wire set_clr,
+    input wire set_valid,
+    /* Request */
+    input wire [KEY_WIDTH-1:0]req_key,
+    input wire req_valid,
+    output wire req_ready,
+    /* Response */
+    output wire [ADDR_WIDTH-1:0]res_addr,
+    output wire [DATA_WIDTH-1:0]res_data,
+    output wire res_valid,
+    output wire res_null
+);
+
+reg line_valid;
+wire [2**ADDR_WIDTH-1:0]line_match;
+wire [ADDR_WIDTH-1:0]enc_addr;
+wire enc_valid;
+wire enc_null;
+
+reg [ADDR_WIDTH-1:0]res_addr_out;
+reg res_valid_out;
+reg res_null_out;
+
+genvar g;
+
+assign req_ready = (rst == 1'b1) ? 1'b0 : ~(line_valid | enc_valid | res_valid_out);
+assign res_addr = res_addr_out;
+assign res_valid = res_valid_out;
+assign res_null = res_null_out;
+
+always @(posedge clk or posedge rst) begin
+    if (rst == 1'b1) begin
+        line_valid <= 1'b0;
+        res_addr_out <= 0;
+        res_valid_out <= 1'b0;
+        res_null_out <= 1'b0;
+    end else begin
+        line_valid <= req_valid;
+        res_addr_out <= enc_addr;
+        res_valid_out <= enc_valid;
+        res_null_out <= enc_null;
+    end
+end
+
+tcam_line_array #(
+    .ADDR_WIDTH(ADDR_WIDTH),
+    .DATA_WIDTH(DATA_WIDTH)
+) tcam_line_array_inst (
+    .clk(clk),
+    .req_valid(req_valid),
+    .req_key(req_key),
+    .match(line_match),
+    .active(line_active)  
+);
+
+tcam_line_encoder #(
+    .ADDR_WIDTH(ADDR_WIDTH)
+) tcam_line_encoder_inst (
+    .clk(clk),
+    .rst(rst),
+    .line_match(line_match),
+    .line_valid(line_valid),
+    .addr(enc_addr),
+    .addr_valid(enc_valid),
+    .addr_null(enc_null)
+);
+
+tcam_sdpram #(
+    .ADDR_WIDTH(ADDR_WIDTH),
+    .DATA_WIDTH(DATA_WIDTH)
+) tcam_sdpram_inst (
+    .clk(clk),
+    .rst(rst),
+    .dina(set_data),
+    .addra(set_addr),
+    .addrb(enc_addr),
+    .wea(set_valid),
+    .readb(res_data)
+);
+
+
+endmodule
