@@ -1,0 +1,47 @@
+module tcam_line_array #(
+    parameter ADDR_WIDTH = 8,  // Address width
+    parameter DATA_WIDTH = 4   // Data width
+)(
+    input clk,
+    input req_valid,
+    input [DATA_WIDTH-1:0] req_key,
+    output reg [2**ADDR_WIDTH-1:0] match,
+    output reg [2**ADDR_WIDTH-1:0] active
+);
+
+    // Memory for TCAM, storing 7 bits: 4 data + 3 parity bits
+    reg [6:0] mem[2**ADDR_WIDTH-1:0];
+    reg [6:0] corrected_data;
+    wire error_detected;
+    reg [2:0] syndrome;
+    integer i;
+
+    // Error detection and correction logic
+    always @(posedge clk) begin
+        if (req_valid) begin
+            for (i = 0; i < 2**ADDR_WIDTH; i = i + 1) begin
+                syndrome <= detect_parity(mem[i]);
+                if (syndrome != 3'b000) begin
+                    // Correct the error by flipping the incorrect bit
+                    corrected_data <= mem[i] ^ (1 << syndrome);
+                    mem[i] <= corrected_data;
+                end
+                match[i] <= (req_key == mem[i][6:3]) && active[i]; // Match logic for the key
+            end
+        end
+    end
+
+    // Function to detect parity errors and return the syndrome (bit to flip)
+    function [2:0] detect_parity(input [6:0] data);
+        integer j;
+        reg [2:0] parity_check;
+        begin
+            parity_check = 3'b000;
+            // Parity bit positions and checks (Hamming (7,4) code)
+            parity_check[0] = data[0] ^ data[2] ^ data[4] ^ data[6]; // Check parity P1
+            parity_check[1] = data[1] ^ data[2] ^ data[5] ^ data[6]; // Check parity P2
+            parity_check[2] = data[3] ^ data[4] ^ data[5] ^ data[6]; // Check parity P3
+            detect_parity = parity_check;
+        end
+    endfunction
+endmodule
