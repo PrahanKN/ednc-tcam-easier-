@@ -1,95 +1,73 @@
 module tcam #(
-    parameter ADDR_WIDTH = 4,
-    parameter KEY_WIDTH = 4,
-    parameter DATA_WIDTH = 4,
-    parameter MASK_DISABLE = 0,
-    parameter RAM_STYLE_DATA = "block"
-)
+parameter DATA_WIDTH = 32, parameter ENTRY_COUNT = 16, parameter HAMMING_THRESHOLD = 3)
 (
-    input wire clk,
-    input wire rst,
-    /* Set */
-    input wire [ADDR_WIDTH-1:0]set_addr,
-    input wire [DATA_WIDTH-1:0]set_data,
-    input wire set_clr,
-    input wire set_valid,
-    /* Request */
-    input wire [KEY_WIDTH-1:0]req_key,
-    input wire req_valid,
-    output wire req_ready,
-    /* Response */
-    output wire [ADDR_WIDTH-1:0]res_addr,
-    output wire [DATA_WIDTH-1:0]res_data,
-    output wire res_valid,
-    output wire res_null
+    input wire clk,                          // Clock signal
+    input wire reset,                        // Reset signal
+    input wire write_enable,                 // Enable signal for writing data
+    input wire [$clog2(ENTRY_COUNT)-1:0] write_index,  // Index to write to
+    input wire [DATA_WIDTH-1:0] write_data,  // Data to write
+    input wire [DATA_WIDTH-1:0] write_mask,  // Mask for "don't care" bits
+    input wire [DATA_WIDTH-1:0] search_key,  // Key to search
+    output reg match,                        // High if there is a match
+    output reg [$clog2(ENTRY_COUNT)-1:0] match_index  // Index of the matched entry
 );
 
-reg line_valid;
-wire [2**ADDR_WIDTH-1:0]line_match;
-wire [ADDR_WIDTH-1:0]enc_addr;
-wire enc_valid;
-wire enc_null;
+    // Memory arrays for TCAM data and mask
+    reg [DATA_WIDTH-1:0] tcam_data [0:ENTRY_COUNT-1];
+    reg [DATA_WIDTH-1:0] tcam_mask [0:ENTRY_COUNT-1];
 
-reg [ADDR_WIDTH-1:0]res_addr_out;
-reg res_valid_out;
-reg res_null_out;
+    // Internal wires for XOR results and Hamming distance calculations
+    wire [ENTRY_COUNT-1:0] hamming_valid;        // Indicates if the Hamming distance is within threshold
+    wire [DATA_WIDTH-1:0] xor_result [0:ENTRY_COUNT-1];
+    wire [$clog2(DATA_WIDTH):0] hamming_distance [0:ENTRY_COUNT-1]; // Hamming distance for each entry
 
-genvar g;
+    // Generate block to calculate Hamming distance for each entry
+    genvar i;
+    generate
+        for (i = 0; i < ENTRY_COUNT; i = i + 1) begin : hamming_loop
+            assign xor_result[i] = (tcam_data[i] & ~tcam_mask[i]) ^ (search_key & ~tcam_mask[i]); // XOR to identify differing bits
+            assign hamming_distance[i] = count_ones(xor_result[i]);  // Calculate Hamming distance
+            assign hamming_valid[i] = (hamming_distance[i] <= HAMMING_THRESHOLD);  // Check if Hamming distance is within threshold
+        end
+    endgenerate
+    // Function to count the number of 1s (Hamming distance)
+function integer count_ones;
+    input [DATA_WIDTH-1:0] value;
+    integer i;
+    begin
+        count_ones = 0;
+        for (i = 0; i < DATA_WIDTH; i = i + 1) begin
+            if (value[i]) count_ones = count_ones + 1;
+        end
+    end
+endfunction
 
-assign req_ready = (rst == 1'b1) ? 1'b0 : ~(line_valid | enc_valid | res_valid_out);
-assign res_addr = res_addr_out;
-assign res_valid = res_valid_out;
-assign res_null = res_null_out;
-
-always @(posedge clk or posedge rst) begin
-    if (rst == 1'b1) begin
-        line_valid <= 1'b0;
-        res_addr_out <= 0;
-        res_valid_out <= 1'b0;
-        res_null_out <= 1'b0;
-    end else begin
-        line_valid <= req_valid;
-        res_addr_out <= enc_addr;
-        res_valid_out <= enc_valid;
-        res_null_out <= enc_null;
+    // Priority encoder to find the first valid match based on Hamming distance
+    integer k;
+// Priority encoder to find the first valid match
+always @(*) begin
+    match = 0;
+    match_index = 0;
+    for (k = 0; k < ENTRY_COUNT; k = k + 1) begin
+        if (!match && hamming_valid[k]) begin
+            match = 1;
+            match_index = k;
+        end
     end
 end
+            integer m;
 
-tcam_line_array #(
-    .ADDR_WIDTH(ADDR_WIDTH),
-    .DATA_WIDTH(DATA_WIDTH)
-) tcam_line_array_inst (
-    .clk(clk),
-    .req_valid(req_valid),
-    .req_key(req_key),
-    .match(line_match),
-    .active(line_active)  
-);
-
-tcam_line_encoder #(
-    .ADDR_WIDTH(ADDR_WIDTH)
-) tcam_line_encoder_inst (
-    .clk(clk),
-    .rst(rst),
-    .line_match(line_match),
-    .line_valid(line_valid),
-    .addr(enc_addr),
-    .addr_valid(enc_valid),
-    .addr_null(enc_null)
-);
-
-tcam_sdpram #(
-    .ADDR_WIDTH(ADDR_WIDTH),
-    .DATA_WIDTH(DATA_WIDTH)
-) tcam_sdpram_inst (
-    .clk(clk),
-    .rst(rst),
-    .dina(set_data),
-    .addra(set_addr),
-    .addrb(enc_addr),
-    .wea(set_valid),
-    .readb(res_data)
-);
-
+    // Write logic to update TCAM entries during positive clock edge
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            for (m = 0; m < ENTRY_COUNT; m = m + 1) begin
+                tcam_data[m] <= 0;    // Reset data
+                tcam_mask[m] <= 0;    // Reset mask
+            end
+        end else if (write_enable) begin
+            tcam_data[write_index] <= write_data;  // Store data in the specified entry
+            tcam_mask[write_index] <= write_mask;  // Store mask in the specified entry
+        end
+    end
 
 endmodule
